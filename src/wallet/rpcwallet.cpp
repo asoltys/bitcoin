@@ -299,7 +299,7 @@ static UniValue setlabel(const JSONRPCRequest& request)
 }
 
 
-static CTransactionRef SendMoney(interfaces::Chain::Lock& locked_chain, CWallet * const pwallet, const CTxDestination &address, CAmount nValue, bool fSubtractFeeFromAmount, const CCoinControl& coin_control, mapValue_t mapValue)
+static CTransactionRef SendMoney(interfaces::Chain::Lock& locked_chain, CWallet * const pwallet, const CTxDestination &address, CAmount nValue, bool fSubtractFeeFromAmount, bool fDryRun, const CCoinControl& coin_control, mapValue_t mapValue)
 {
     CAmount curBalance = pwallet->GetBalance();
 
@@ -331,12 +331,19 @@ static CTransactionRef SendMoney(interfaces::Chain::Lock& locked_chain, CWallet 
             strError = strprintf("Error: This transaction requires a transaction fee of at least %s", FormatMoney(nFeeRequired));
         throw JSONRPCError(RPC_WALLET_ERROR, strError);
     }
-    CValidationState state;
-    if (!pwallet->CommitTransaction(tx, std::move(mapValue), {} /* orderForm */, reservekey, g_connman.get(), state)) {
-        strError = strprintf("Error: The transaction was rejected! Reason given: %s", FormatStateMessage(state));
-        throw JSONRPCError(RPC_WALLET_ERROR, strError);
+
+    if (!fDryRun) {
+      CValidationState state;
+      if (!pwallet->CommitTransaction(tx, std::move(mapValue), {} /* orderForm */, reservekey, g_connman.get(), state)) {
+          strError = strprintf("Error: The transaction was rejected! Reason given: %s", FormatStateMessage(state));
+          throw JSONRPCError(RPC_WALLET_ERROR, strError);
+      }
+      return tx;
     }
-    return tx;
+
+    UniValue result(UniValue::VOBJ);
+    TxToJSON(*tx, hash_block, result);
+    return result;
 }
 
 static UniValue sendtoaddress(const JSONRPCRequest& request)
@@ -348,7 +355,7 @@ static UniValue sendtoaddress(const JSONRPCRequest& request)
         return NullUniValue;
     }
 
-    if (request.fHelp || request.params.size() < 2 || request.params.size() > 8)
+    if (request.fHelp || request.params.size() < 2 || request.params.size() > 9)
         throw std::runtime_error(
             RPCHelpMan{"sendtoaddress",
                 "\nSend an amount to a given address." +
@@ -369,6 +376,7 @@ static UniValue sendtoaddress(const JSONRPCRequest& request)
             "       \"UNSET\"\n"
             "       \"ECONOMICAL\"\n"
             "       \"CONSERVATIVE\""},
+                    {"dryrun", RPCArg::Type::BOOL, /* opt */ true, /* default_val */ "false", "Create the transaction without sending."},
                 }}
                 .ToString() +
             "\nResult:\n"
@@ -424,10 +432,14 @@ static UniValue sendtoaddress(const JSONRPCRequest& request)
         }
     }
 
+    bool fDryRun = false;
+    if (!request.params[8].isNull()) {
+        fDryRun = request.params[8].get_bool();
+    }
 
     EnsureWalletIsUnlocked(pwallet);
 
-    CTransactionRef tx = SendMoney(*locked_chain, pwallet, dest, nAmount, fSubtractFeeFromAmount, coin_control, std::move(mapValue));
+    CTransactionRef tx = SendMoney(*locked_chain, pwallet, dest, nAmount, fSubtractFeeFromAmount, fDryRun, coin_control, std::move(mapValue));
     return tx->GetHash().GetHex();
 }
 
